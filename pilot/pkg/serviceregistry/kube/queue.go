@@ -139,6 +139,7 @@ type ChainHandler struct {
 }
 
 // Apply is the handler function
+// 当事件被触发都会执行handler.Apply，再执行注册的方法。
 func (ch *ChainHandler) Apply(obj interface{}, event model.Event) error {
 	for _, f := range ch.funcs {
 		if err := f(obj, event); err != nil {

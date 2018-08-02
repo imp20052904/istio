@@ -36,6 +36,7 @@ const (
 )
 
 func addMonitor(mux *http.ServeMux) {
+	// 当前提供/metrics和/version两个运行状况和基本信息查询URL。
 	mux.Handle(metricsPath, promhttp.Handler())
 	mux.HandleFunc(versionPath, func(out http.ResponseWriter, req *http.Request) {
 		if _, err := out.Write([]byte(version.Info.String())); err != nil {

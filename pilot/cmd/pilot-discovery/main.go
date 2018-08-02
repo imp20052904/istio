@@ -57,12 +57,14 @@ var (
 			stop := make(chan struct{})
 
 			// Create the server for the discovery service.
+			// bootstrap.NewServer利用PilotArgs构建bootstrap包下的server对象
 			discoveryServer, err := bootstrap.NewServer(serverArgs)
 			if err != nil {
 				return fmt.Errorf("failed to create discovery service: %v", err)
 			}
 
 			// Start the server
+			// 启动discoveryServer, 而Start方法的逻辑是顺序执行之前初始化过程中在server对象上注册的一系列启动函数（startFunc）
 			_, err = discoveryServer.Start(stop)
 			if err != nil {
 				return fmt.Errorf("failed to start discovery service: %v", err)
@@ -74,6 +76,8 @@ var (
 	}
 )
 
+// pilot-discovery的init方法为pilot-discovery的discovery命令配置一系列flag及其默认值。
+// flag值被保存在bootstrap包的PilotArgs对象中
 func init() {
 	discoveryCmd.PersistentFlags().StringSliceVar(&serverArgs.Service.Registries, "registries",
 		[]string{string(serviceregistry.KubernetesRegistry)},

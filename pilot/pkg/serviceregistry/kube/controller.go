@@ -109,7 +109,7 @@ func NewController(client kubernetes.Interface, options ControllerOptions) *Cont
 		client:       client,
 		queue:        NewQueue(1 * time.Second),
 	}
-
+	// 对k8s资源Service, Endpoint, Node and Pod订阅
 	out.services = out.createInformer(&v1.Service{}, "Service", options.ResyncPeriod,
 		func(opts meta_v1.ListOptions) (runtime.Object, error) {
 			return client.CoreV1().Services(options.WatchedNamespace).List(opts)
@@ -221,6 +221,7 @@ func (c *Controller) Run(stop <-chan struct{}) {
 }
 
 // Services implements a service catalog operation
+// 例如: list services
 func (c *Controller) Services() ([]*model.Service, error) {
 	list := c.services.informer.GetStore().List()
 	out := make([]*model.Service, 0, len(list))

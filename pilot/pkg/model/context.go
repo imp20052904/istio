@@ -53,6 +53,7 @@ type Proxy struct {
 	ClusterID string
 
 	// Type specifies the node type
+	// 运行模式，有3个取值范围。sidecar|ingress|router
 	Type NodeType
 
 	// IPAddress is the IP address of the proxy used to identify it and its

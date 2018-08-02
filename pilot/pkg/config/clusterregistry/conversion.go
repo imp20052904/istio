@@ -64,6 +64,8 @@ type ClusterStore struct {
 }
 
 // NewClustersStore initializes data struct to store clusters information
+// Istio的控制平面组件（如pilot-discovery）运行所在的Kubernetes集群叫本地集群，通过这个istio控制面板连接的其他Kubernetes集群叫远程集群（remote cluster）
+// remote cluster信息被保存在Server.clusterStore成员中，里面包含一个map，将Metadata映射成RemoteCluster对象
 func NewClustersStore() *ClusterStore {
 	rc := make(map[Metadata]*RemoteCluster)
 	return &ClusterStore{

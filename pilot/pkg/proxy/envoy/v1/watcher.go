@@ -82,6 +82,7 @@ const (
 
 func (w *watcher) Run(ctx context.Context) {
 	// agent consumes notifications from the controller
+	// 首先启动协程执行agent.Run（agent的主循环）
 	go w.agent.Run(ctx)
 
 	// kickstart the proxy with partial state (in case there are no notifications coming)
@@ -92,13 +93,14 @@ func (w *watcher) Run(ctx context.Context) {
 	for _, cert := range w.certs {
 		certDirs = append(certDirs, cert.Directory)
 	}
-
+	// 然后监控各种证书，如果证书文件发生变化，则调用ScheduleConfigUpdate来reload envoy，然后watcher.retrieveAZ(TODO)
 	go watchCerts(ctx, certDirs, watchFileEvents, defaultMinDelay, w.Reload)
 	go w.retrieveAZ(ctx, azRetryInterval, azRetryAttempts)
 
 	<-ctx.Done()
 }
 
+// Reload会调用agent.ScheduleConfigUpdate，并最终导致第一个envoy进程启动
 func (w *watcher) Reload() {
 	config := BuildConfig(w.config, w.pilotSAN)
 
@@ -295,6 +297,7 @@ func (proxy envoy) args(fname string, epoch int) []string {
 	return startupArgs
 }
 
+// Envoy启动过程
 func (proxy envoy) Run(config interface{}, epoch int, abort <-chan error) error {
 	envoyConfig, ok := config.(*Config)
 	if !ok {
@@ -337,6 +340,7 @@ func (proxy envoy) Run(config interface{}, epoch int, abort <-chan error) error 
 	log.Infof("Envoy command: %v", args)
 
 	/* #nosec */
+	// 调用exec.Cmd.Start方法(启动了一个新进程)，并将envoy的标准输出和标准错误置为os.Stdout和Stderr
 	cmd := exec.Command(proxy.config.BinaryPath, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -353,7 +357,7 @@ func (proxy envoy) Run(config interface{}, epoch int, abort <-chan error) error 
 		}()
 		return nil
 	}
-
+	// 启动一个新的协程来wait刚刚启动的envoy进程，并把得到的结果写到done channel里
 	done := make(chan error, 1)
 	go func() {
 		done <- cmd.Wait()
@@ -361,6 +365,7 @@ func (proxy envoy) Run(config interface{}, epoch int, abort <-chan error) error 
 
 	select {
 	case err := <-abort:
+		// 持续监听前面说到由agent创建并管理的，并与envoy进程一一对应的abortCh，如果收到abort事件通知，则会调用Cmd.Process.Kill方法杀掉envoy，如果杀进程的过程中发生错误，也会把错误信息log一下，然后把从abortCh读到的事件返回给waitForExit。
 		log.Warnf("Aborting epoch %d", epoch)
 		if errKill := cmd.Process.Kill(); errKill != nil {
 			log.Warnf("killing epoch %d caused an error %v", epoch, errKill)
@@ -369,6 +374,9 @@ func (proxy envoy) Run(config interface{}, epoch int, abort <-chan error) error 
 	case err := <-done:
 		return err
 	}
+	// 这里我们总结启动envoy过程中的协程关系：
+	// agent是全局唯一一个agent协程，它在启动每个envoy的时候，会再启动一个waitForExit协程，
+	// waitForExit会调用Command.Start启动另外一个进程运行envoy，然后waitForExit负责监听abortCh和envoy进程执行结果。
 }
 
 func (proxy envoy) Cleanup(epoch int) {

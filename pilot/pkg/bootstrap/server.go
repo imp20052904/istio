@@ -157,8 +157,8 @@ type PilotArgs struct {
 // Server contains the runtime configuration for the Pilot discovery service.
 type Server struct {
 	mesh                    *meshconfig.MeshConfig
-	ServiceController       *aggregate.Controller
-	configController        model.ConfigStoreCache
+	ServiceController       *aggregate.Controller //利用client-go库从Kubernetes获取pod 、service、node、endpoint，并将这些CRD转换为model包下的Service、ServiceInstance对象。
+	configController        model.ConfigStoreCache //ConfigStoreCache对象中embed了ConfigStore对象
 	mixerSAN                []string
 	kubeClient              kubernetes.Interface
 	startFuncs              []startFunc
@@ -172,7 +172,7 @@ type Server struct {
 	GRPCServer       *grpc.Server
 	secureGRPCServer *grpc.Server
 	DiscoveryService *envoy.DiscoveryService
-	istioConfigStore model.IstioConfigStore
+	istioConfigStore model.IstioConfigStore //IstioConfigStore封装了embed在ConfigStoreCache中的同一个ConfigStore对象
 
 	// An in-memory service discovery, enabled if 'mock' registry is added.
 	// Currently used for tests.
@@ -201,34 +201,44 @@ func NewServer(args PilotArgs) (*Server, error) {
 	if os.Getenv("PILOT_VALIDATE_CLUSTERS") == "false" {
 		envoy.ValidateClusters = false
 	}
-
+	// new Server()
 	s := &Server{}
 
 	// Apply the arguments to the configuration.
+	// 1. 创建Kubernetes apiserver client（initKubeClient方法）
 	if err := s.initKubeClient(&args); err != nil {
 		return nil, err
 	}
+	// 2. 多集群Kubernetes配置（initClusterRegistryies方法）
 	if err := s.initClusterRegistries(&args); err != nil {
 		return nil, err
 	}
+	// 3. 读取mesh配置（initMesh方法）
 	if err := s.initMesh(&args); err != nil {
 		return nil, err
 	}
+	// 4. 配置MixerSan（initMixerSan方法）
 	if err := s.initMixerSan(&args); err != nil {
 		return nil, err
 	}
+	// 5. 初始化与配置存储中心的连接（initConfigController方法） 【重要】
 	if err := s.initConfigController(&args); err != nil {
 		return nil, err
 	}
+	// 6. 配置与服务注册中心（service registry）的连接（initServiceControllers方法）【重要】
 	if err := s.initServiceControllers(&args); err != nil {
 		return nil, err
 	}
+	// 7. 初始化discovery服务（initDiscoveryService）【重要】
+	// istio service mesh中的envoy sidecar通过连接pilot-discovery的discovery服务获取服务注册情况、流量控制策略等控制面的控制信息
 	if err := s.initDiscoveryService(&args); err != nil {
 		return nil, err
 	}
+	// 8. 打开运行情况检查端口（initMonitor方法）
 	if err := s.initMonitor(&args); err != nil {
 		return nil, err
 	}
+	// 9. 监控多Kubernetes集群中远程集群访问信息变化（initMultiClusterController方法）
 	if err := s.initMultiClusterController(&args); err != nil {
 		return nil, err
 	}
@@ -246,6 +256,7 @@ func NewServer(args PilotArgs) (*Server, error) {
 // Serving can be cancelled at any time by closing the provided stop channel.
 func (s *Server) Start(stop chan struct{}) (net.Addr, error) {
 	// Now start all of the components.
+	// 顺序执行之前初始化过程中在server对象上注册的一系列启动函数（startFunc）
 	for _, fn := range s.startFuncs {
 		if err := fn(stop); err != nil {
 			return nil, err
@@ -259,6 +270,8 @@ func (s *Server) Start(stop chan struct{}) (net.Addr, error) {
 type startFunc func(stop chan struct{}) error
 
 // initMonitor initializes the configuration for the pilot monitoring server.
+// pilot-discovery默认打开9093端口（端口号可以通过pilot-discovery discovery命令的monitoringAddr flag自定义），对外提供HTTP协议的自身运行状态检查监控功能。
+// 当前提供/metrics和/version两个运行状况和基本信息查询URL。
 func (s *Server) initMonitor(args *PilotArgs) error {
 	s.addStartFunc(func(stop chan struct{}) error {
 		monitor, err := startMonitor(args.DiscoveryOptions.MonitoringPort, s.mux)
@@ -276,18 +289,22 @@ func (s *Server) initMonitor(args *PilotArgs) error {
 	return nil
 }
 
+// istio支持使用一个istio control plane来管理跨多个Kubernetes集群上的service mesh。这个叫“multicluster”
 func (s *Server) initClusterRegistries(args *PilotArgs) (err error) {
+	// new Map
 	s.clusterStore = clusterregistry.NewClustersStore()
-
+	// 检测上一步骤是否创建好kubeClient。否，则直接报错返回
 	if s.kubeClient == nil {
 		log.Infof("skipping cluster registries, no kube-client created")
 		return nil
 	}
 
 	// Drop from multicluster test cases if Mock Registry is used
+	// 检测服务注册中心中是否包含Mock类型，是的话直接返回
 	if checkForMock(args.Service.Registries) {
 		return nil
 	}
+	// 如果pilot-discovery discovery命令的flag clusterRegistriesConfigMap不为空，则从本地Kubernetes集群中读取一个包含远程Kubernetes集群访问信息的configmap
 	if args.Config.ClusterRegistriesConfigmap != "" {
 		if err = clusterregistry.ReadClusters(s.kubeClient,
 			args.Config.ClusterRegistriesConfigmap,
@@ -363,8 +380,10 @@ func (s *Server) initMesh(args *PilotArgs) error {
 		s.mesh = args.MeshConfig
 		return nil
 	}
+	// mesh配置由MeshConfig结构体定义，包含MixerCheckServer、MixerReportServer、ProxyListenPort、RdsRefreshDelay、MixerAddress等一些列配置
 	var mesh *meshconfig.MeshConfig
 	if args.Mesh.ConfigFile != "" {
+		// 读取默认mesh配置文件”/etc/istio/config/mesh”（用户可以通过discovery命令的flag meshConfig提供自定义值）
 		fileMesh, err := cmd.ReadMeshConfig(args.Mesh.ConfigFile)
 		if err != nil {
 			log.Warnf("failed to read mesh configuration, using default: %v", err)
@@ -374,6 +393,7 @@ func (s *Server) initMesh(args *PilotArgs) error {
 	}
 
 	if mesh == nil {
+		// 如果配置文件读取失败，也可以从Kubernetes集群中读取configmap获得默认的配置
 		var err error
 		// Config file either wasn't specified or failed to load - use a default mesh.
 		if _, mesh, err = GetMeshConfig(s.kubeClient, kube.IstioNamespace, kube.IstioConfigMap); err != nil {
@@ -404,6 +424,7 @@ func (s *Server) initMixerSan(args *PilotArgs) error {
 	if s.mesh == nil {
 		return fmt.Errorf("the mesh has not been configured before configuring mixer san")
 	}
+	// 如果mesh配置中的控制平面认证策略为mutual TLS(默认为none)，则配置mixerSan
 	if s.mesh.DefaultConfig.ControlPlaneAuthPolicy == meshconfig.AuthenticationPolicy_MUTUAL_TLS {
 		s.mixerSAN = envoy.GetMixerSAN(args.Config.ControllerOptions.DomainSuffix, args.Namespace)
 	}
@@ -437,6 +458,7 @@ func (s *Server) initKubeClient(args *PilotArgs) error {
 		if kuberr != nil {
 			return multierror.Prefix(kuberr, "failed to connect to Kubernetes API.")
 		}
+		// 根据服务注册中心配置是否包含Kubernetes（一个istio service mesh可以连接多个服务注册中心）创建kubeClient，保存在Server.kubeClient成员中
 		s.kubeClient = client
 	}
 	return nil
@@ -455,7 +477,12 @@ func (c *mockController) AppendInstanceHandler(f func(*model.ServiceInstance, mo
 func (c *mockController) Run(<-chan struct{}) {}
 
 // initConfigController creates the config controller in the pilotConfig.
+// 对istio做出的各种配置，比如route rule、virtualservice等，需要保存在配置存储中心（config store）内
 func (s *Server) initConfigController(args *PilotArgs) error {
+	// istio当前支持2种形式的config store:
+	// 1) 文件存储
+	// 通过pilot-discovery discovery命令的configDir flag来设置配置文件的文件系统路径，默认为“configDir”。
+	// 后续使用pilot/pkg/config/memory包下的controller和pilot/pkg/config/monitor持续监控配置文件的变化。
 	if args.Config.FileDir != "" {
 		store := memory.Make(ConfigDescriptor)
 		configController := memory.NewController(store)
@@ -474,6 +501,7 @@ func (s *Server) initConfigController(args *PilotArgs) error {
 
 		s.configController = configController
 	} else {
+		// 2) Kubernetes CRD
 		controller, err := s.makeKubeConfigController(args)
 		if err != nil {
 			return err
@@ -483,6 +511,7 @@ func (s *Server) initConfigController(args *PilotArgs) error {
 	}
 
 	// Defer starting the controller until after the service is created.
+	// CRD资源注册完成之后将创建config controller，搭建对CRD资源Add、Update、Delete事件的处理框架
 	s.addStartFunc(func(stop chan struct{}) error {
 		go s.configController.Run(stop)
 		return nil
@@ -492,12 +521,13 @@ func (s *Server) initConfigController(args *PilotArgs) error {
 }
 
 func (s *Server) makeKubeConfigController(args *PilotArgs) (model.ConfigStoreCache, error) {
+	// 1. 读取pilot-discovery discovery命令的kubeconfig flag配置的kubeconfig配置文件，flag默认为空
 	kubeCfgFile := s.getKubeCfgFile(args)
 	configClient, err := crd.NewClient(kubeCfgFile, ConfigDescriptor, args.Config.ControllerOptions.DomainSuffix)
 	if err != nil {
 		return nil, multierror.Prefix(err, "failed to open a config client.")
 	}
-
+	// 2.注册Kubernetes CRD资源。注册的资源类型定义在bootstrap包下的全局变量ConfigDescriptor变量里
 	if err = configClient.RegisterResources(); err != nil {
 		return nil, multierror.Prefix(err, "failed to register custom resources.")
 	}
@@ -565,6 +595,7 @@ func (s *Server) createK8sServiceControllers(serviceControllers *aggregate.Contr
 func (s *Server) initMultiClusterController(args *PilotArgs) (err error) {
 	if checkForKubernetes(args.Service.Registries) {
 		// Start secret controller which watches for runtime secret Object changes and adds secrets dynamically
+		// 当使用一个istio控制面构建跨多个Kubernetes集群的service mesh时，远程Kubernetes集群的访问信息保存在secret中，此处使用list/watch监控secret资源的变化。
 		err = clusterregistry.StartSecretController(s.kubeClient,
 			s.clusterStore,
 			s.ServiceController,
@@ -579,8 +610,12 @@ func (s *Server) initMultiClusterController(args *PilotArgs) (err error) {
 
 // initServiceControllers creates and initializes the service controllers
 func (s *Server) initServiceControllers(args *PilotArgs) error {
+	// 代表pilot-discovery的server对象包含一个ServiceController对象，一个ServiceController对象包含一个或多个service controller
+	// 每个service controller负责连接服务注册中心并同步相关的服务注册信息。
 	serviceControllers := aggregate.NewController()
 	registered := make(map[serviceregistry.ServiceRegistry]bool)
+	// 当前istio支持的服务注册中心类型包括ConfigRegistry, MockRegistry, Kubernetes, Consul, Eureka和CloudFoundry。
+	// 不过仅对Kubernetes服务注册中心的支持成熟度达到stable水平，其他服务注册中心的集成工作成熟度还都处于alpha水平。
 	for _, r := range args.Service.Registries {
 		serviceRegistry := serviceregistry.ServiceRegistry(r)
 		if _, exists := registered[serviceRegistry]; exists {
@@ -691,7 +726,8 @@ func (s *Server) initServiceControllers(args *PilotArgs) error {
 		ServiceAccounts:  serviceEntryStore,
 	}
 	serviceControllers.AddRegistry(serviceEntryRegistry)
-
+	// ServiceController对象的结构体定义在aggregate包下，从包名可以看出一个ServiceController对象是对多个service controller的聚合。
+	// 所谓聚合，也就是当对ServiceController操作时，会影响到其聚合的所有service controller
 	s.ServiceController = serviceControllers
 
 	// Defer running of the service controllers.
@@ -743,6 +779,7 @@ func (s *Server) initDiscoveryService(args *PilotArgs) error {
 	}
 
 	// Set up discovery service
+	// i) 创建对外提供REST协议的discovery服务的discovery service对象(xds)
 	discovery, err := envoy.NewDiscoveryService(
 		s.ServiceController,
 		s.configController,
@@ -758,6 +795,8 @@ func (s *Server) initDiscoveryService(args *PilotArgs) error {
 
 	// For now we create the gRPC server sourcing data from Pilot's older data model.
 	s.initGrpcServer()
+	// ii) 创建对外提供gRPC协议discovery服务的Envoy xds server
+	// 所谓的xds代表Envoy v2 data plane api中的eds、 cds、 rds、 lds、 hds、 ads、 kds等一系列api。Envoy xds server默认通过15010和15012端口对外提供服务
 	s.EnvoyXdsServer = envoyv2.NewDiscoveryServer(environment, v1alpha3.NewConfigGenerator(registry.NewPlugins()))
 	// TODO: decouple v2 from the cache invalidation, use direct listeners.
 	envoy.V2ClearCache = s.EnvoyXdsServer.ClearCacheFunc()

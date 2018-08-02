@@ -141,6 +141,7 @@ func init() {
 }
 
 // DiscoveryService publishes services, clusters, and routes for all proxies
+// Struct，核心数据结构
 type DiscoveryService struct {
 	model.Environment
 
@@ -343,6 +344,7 @@ func NewDiscoveryService(ctl model.Controller, configCache model.ConfigStoreCach
 		container.ServeMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 		container.ServeMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 	}
+	// 暴露了SDS/CDS/RDS/LDS接口(REST_JSON)，envoy再使用轮询的方式，通过这些接口获取配置信息
 	out.Register(container)
 
 	out.webhookEndpoint, out.webhookClient = util.NewWebHookClient(o.WebhookEndpoint)
@@ -365,6 +367,7 @@ func NewDiscoveryService(ctl model.Controller, configCache model.ConfigStoreCach
 		// (especially mixerclient HTTP and quota)
 		configHandler := func(model.Config, model.Event) { out.clearCache() }
 		for _, descriptor := range model.IstioConfigTypes {
+			// 注册方法
 			configCache.RegisterEventHandler(descriptor.Type, configHandler)
 		}
 	}
@@ -432,7 +435,7 @@ func (ds *DiscoveryService) Register(container *restful.Container) {
 		To(ds.GetCacheStats).
 		Doc("Get discovery service cache stats").
 		Writes(discoveryCacheStats{}))
-
+	// 在pilot-discovery开放了一个清二级缓存的接口。手动触发
 	ws.Route(ws.
 		POST("/cache_stats_delete").
 		To(ds.ClearCacheStats).
@@ -477,6 +480,7 @@ func (ds *DiscoveryService) ClearCache() {
 
 // clearCache will clear all envoy caches. Called by service, instance and config handlers.
 // This will impact the performance, since envoy will need to recalculate.
+// 方法 out.clearCache()，实现了清二级缓存和推送数据
 func (ds *DiscoveryService) clearCache() {
 	clearCacheMutex.Lock()
 	defer clearCacheMutex.Unlock()
@@ -496,6 +500,7 @@ func (ds *DiscoveryService) clearCache() {
 	// TODO: clear the RDS few seconds after CDS !!
 	lastClearCache = time.Now()
 	log.Infof("Cleared discovery service cache")
+	//清二级缓存
 	ds.sdsCache.clear()
 	ds.cdsCache.clear()
 	ds.rdsCache.clear()
@@ -570,6 +575,7 @@ func (ds *DiscoveryService) ListEndpoints(request *restful.Request, response *re
 
 	key := request.Request.URL.String()
 	out, resourceCount, cached := ds.sdsCache.cachedDiscoveryResponse(key)
+	//没有缓存
 	if !cached {
 		hostname, ports, labels := model.ParseServiceKey(request.PathParameter(ServiceKey))
 		// envoy expects an empty array if no hosts are available
@@ -599,6 +605,7 @@ func (ds *DiscoveryService) ListEndpoints(request *restful.Request, response *re
 		}
 		resourceCount = uint32(len(endpoints))
 		if resourceCount > 0 {
+			//缓存数据
 			ds.sdsCache.updateCachedDiscoveryResponse(key, resourceCount, out)
 		}
 	}

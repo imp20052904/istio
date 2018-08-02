@@ -35,10 +35,11 @@ import (
 
 // controller is a collection of synchronized resource watchers.
 // Caches are thread-safe
+// config controller包含以下3个部分
 type controller struct {
-	client *Client
-	queue  kube.Queue
-	kinds  map[string]cacheHandler
+	client *Client //client是一个rest client集合，用于连接Kubernetes apiserver，实现对istio CRD资源的list/watch
+	queue  kube.Queue //用于缓存istio CRD资源对象（如virtual-service、route-rule等）的Add、Update、Delete事件的队列，等待后续由config controller处理
+	kinds  map[string]cacheHandler //为每种CRD资源（如virtual-service、route-rule等）创建一个用于list/watch的SharedIndexInformer
 }
 
 type cacheHandler struct {
@@ -129,7 +130,7 @@ func (c *controller) notify(obj interface{}, event model.Event) error {
 	}
 	return nil
 }
-
+// 初始化List和Watch，注册Add，Update，Delete事件。
 func (c *controller) createInformer(
 	o runtime.Object,
 	otype string,
@@ -140,6 +141,7 @@ func (c *controller) createInformer(
 	handler.Append(c.notify)
 
 	// TODO: finer-grained index (perf)
+	// 利用client-go库里的SharedIndexInformer实现对CRD资源的list/watch，为每种CRD资源的Add、Update、Delete事件创建处理统一的流程框架
 	informer := cache.NewSharedIndexInformer(
 		&cache.ListWatch{ListFunc: lf, WatchFunc: wf}, o,
 		resyncPeriod, cache.Indexers{})
@@ -147,6 +149,7 @@ func (c *controller) createInformer(
 	informer.AddEventHandler(
 		cache.ResourceEventHandlerFuncs{
 			// TODO: filtering functions to skip over un-referenced resources (perf)
+			// 这个流程将Add、Update、Delete事件涉及到的CRD资源对象封装为一个Task对象，并将之push到config controller的queue成员里
 			AddFunc: func(obj interface{}) {
 				k8sEvents.With(prometheus.Labels{"type": otype, "event": "add"}).Add(1)
 				c.queue.Push(kube.NewTask(handler.Apply, obj, model.EventAdd))
@@ -198,6 +201,7 @@ func (c *controller) HasSynced() bool {
 }
 
 func (c *controller) Run(stop <-chan struct{}) {
+	// 启动协程逐一处理CRD资源事件（queue.run），处理方法是调用每个从queue中取出的Task对象上的ChainHandler
 	go c.queue.Run(stop)
 
 	for _, ctl := range c.kinds {

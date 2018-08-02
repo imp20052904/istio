@@ -20,7 +20,7 @@ type ServiceRegistry string
 const (
 	// MockRegistry environment flag
 	MockRegistry ServiceRegistry = "Mock"
-	// KubernetesRegistry environment flag
+	// KubernetesRegistry environment flag, 当前只有Kubernetes的集成达到stable程度
 	KubernetesRegistry ServiceRegistry = "Kubernetes"
 	// ConsulRegistry environment flag
 	ConsulRegistry ServiceRegistry = "Consul"

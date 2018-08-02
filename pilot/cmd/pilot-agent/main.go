@@ -43,8 +43,8 @@ import (
 )
 
 var (
-	role     model.Proxy
-	registry serviceregistry.ServiceRegistry
+	role     model.Proxy //pilot-agent的role类型为model包下的Proxy，决定了pilot-agent的“角色”
+	registry serviceregistry.ServiceRegistry //注册中心类型。Mock|Kubernetes|Consul|Eureka|CloudFoundry
 
 	// proxy config flags (named identically)
 	configPath               string
@@ -83,12 +83,14 @@ var (
 				return err
 			}
 			log.Infof("Version %s", version.Info.String())
+			// role参数设置
 			role.Type = model.Sidecar
 			if len(args) > 0 {
 				role.Type = model.NodeType(args[0])
 			}
 
 			// set values from registry platform
+			// IPAddress, ID, Domain 它们都可以通过pilot-agent的proxy命令的对应flag来提供用户自定义值
 			if len(role.IPAddress) == 0 {
 				if registry == serviceregistry.KubernetesRegistry {
 					role.IPAddress = os.Getenv("INSTANCE_IP")
@@ -125,6 +127,9 @@ var (
 
 			log.Infof("Proxy role: %#v", role)
 
+			/**
+			 * 1.proxy命令处理流程的前半部分负责将这些flag组装成为envoy的配置ProxyConfig对象
+			 */
 			proxyConfig := meshconfig.ProxyConfig{}
 
 			// set all flags
@@ -235,6 +240,10 @@ var (
 				}
 			}
 
+			/**
+			 * 2.envoy监控与管理
+			 */
+		    // (1)创建envoy对象
 			var envoyProxy proxy.Proxy
 			if bootstrapv2 {
 				// Using a different constructor - the code will likely be refactored / split from the v1,
@@ -243,12 +252,16 @@ var (
 			} else {
 				envoyProxy = envoy.NewProxy(proxyConfig, role.ServiceNode(), proxyLogLevel)
 			}
+			// (2)创建agent对象
 			agent := proxy.NewAgent(envoyProxy, proxy.DefaultRetry)
+			// 创建watcher并启动协程执行watcher.Run
 			watcher := envoy.NewWatcher(proxyConfig, agent, role, certs, pilotSAN)
+			// (4)创建context
 			ctx, cancel := context.WithCancel(context.Background())
 			go watcher.Run(ctx)
 
 			stop := make(chan struct{})
+			// 调用cmd.WaitSignal以等待进程接收到SIGINT, SIGTERM信号，接受到信号之后通过context通知agent，agent接到通知后调用terminate来kill所有envoy进程，并退出agent进程
 			cmd.WaitSignal(stop)
 			<-stop
 			cancel()

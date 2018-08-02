@@ -55,6 +55,7 @@ func startMonitor(port uint16, enableProfiling bool, lf listenFunc) (*monitor, e
 	// is coming. that design will include proper coverage of statusz/healthz type
 	// functionality, in addition to how mixer reports its own metrics.
 	mux := http.NewServeMux()
+	// 当前提供/metrics和/version两个运行状况和基本信息查询URL。
 	mux.Handle(metricsPath, promhttp.Handler())
 	mux.HandleFunc(versionPath, func(out http.ResponseWriter, req *http.Request) {
 		if _, err := out.Write([]byte(version.Info.String())); err != nil {

@@ -115,6 +115,9 @@ type Config struct {
 //
 // Object references supplied and returned from this interface should be
 // treated as read-only. Modifying them violates thread-safety.
+
+// ConfigStore对象利用client-go库从Kubernetes获取route rule、virtual service等CRD形式存在控制面信息，转换为model包下的Config对象，
+// 对外提供Get、List、Create、Update、Delete等CRUD服务
 type ConfigStore interface {
 	// ConfigDescriptor exposes the configuration type schema known by the config store.
 	// The type schema defines the bidrectional mapping between configuration
@@ -241,6 +244,9 @@ func (descriptor ConfigDescriptor) GetByType(name string) (ProtoSchema, bool) {
 
 // IstioConfigStore is a specialized interface to access config store using
 // Istio configuration types
+// IstioConfigStore封装了embed在ConfigStoreCache中的同一个ConfigStore对象。
+// 其主要目的是为访问route rule、virtual service等数据提供更加方便的接口。
+// 相对于ConfigStore提供的Get、List、Create、Update、Delete接口，IstioConfigStore直接提供更为方便的RouteRules、VirtualServices接口。
 type IstioConfigStore interface {
 	ConfigStore
 
