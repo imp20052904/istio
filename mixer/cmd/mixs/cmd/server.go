@@ -24,6 +24,7 @@ import (
 	"istio.io/istio/pkg/version"
 )
 
+// 容器启动时执行的mixs指令为/usr/local/bin/mixs server --configStoreURL=fs:///etc/opt/mixer/configroot --configStoreURL=k8s://
 func serverCmd(info map[string]template.Info, adapters []adapter.InfoFn, printf, fatalf shared.FormatFn) *cobra.Command {
 	sa := server.DefaultArgs()
 	sa.Templates = info
@@ -33,6 +34,7 @@ func serverCmd(info map[string]template.Info, adapters []adapter.InfoFn, printf,
 		Use:   "server",
 		Short: "Starts Mixer as a server",
 		Run: func(cmd *cobra.Command, args []string) {
+			// 用户执行mixs server命令时，启动mixer gRPC server
 			runServer(sa, printf, fatalf)
 		},
 	}
@@ -93,6 +95,7 @@ func serverCmd(info map[string]template.Info, adapters []adapter.InfoFn, printf,
 	return serverCmd
 }
 
+// runServer函数启动mixer gRPC server
 func runServer(sa *server.Args, printf, fatalf shared.FormatFn) {
 	printf("Mixer started with\n%s", sa)
 

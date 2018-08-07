@@ -45,8 +45,8 @@ import (
 type Server struct {
 	shutdown  chan error
 	server    *grpc.Server
-	gp        *pool.GoroutinePool
-	adapterGP *pool.GoroutinePool
+	gp        *pool.GoroutinePool //API worker线程池
+	adapterGP *pool.GoroutinePool //adapter worker线程池
 	listener  net.Listener
 	monitor   *monitor
 	tracer    io.Closer
@@ -102,13 +102,15 @@ func newServer(a *Args, p *patchTable) (*Server, error) {
 	adapterPoolSize := a.AdapterWorkerPoolSize
 
 	s := &Server{}
+	// 1.初始化API worker线程池
 	s.gp = pool.NewGoroutinePool(apiPoolSize, a.SingleThreaded)
 	s.gp.AddWorkers(apiPoolSize)
-
+	// 2.初始化adapter worker线程池
 	s.adapterGP = pool.NewGoroutinePool(adapterPoolSize, a.SingleThreaded)
 	s.adapterGP.AddWorkers(adapterPoolSize)
-
+	// 3.构造存放Mixer模板仓库
 	tmplRepo := template.NewRepository(a.Templates)
+	// 4.构造存放adapter的map
 	adapterMap := config.AdapterInfoMap(a.Adapters, tmplRepo.SupportsTemplate)
 
 	s.Probe = probe.NewProbe()
@@ -184,10 +186,12 @@ func newServer(a *Args, p *patchTable) (*Server, error) {
 		t := v // Make a local copy, otherwise we end up capturing the location of the last entry
 		templateMap[k] = &t
 	}
-
+	// 5.构造Mixer runtime实例。runtime实例是Mixer运行时环境的主要入口。
+	// 它会监听配置变更，配置变更时会动态构造新的handler实例和dispatcher实例。
+	// dispatcher会基于配置和attributes对请求进行调度，调用相应的adapters处理请求。
 	rt = p.newRuntime(st, templateMap, adapterMap, a.ConfigIdentityAttribute, a.ConfigDefaultNamespace,
 		s.gp, s.adapterGP, a.TracingOptions.TracingEnabled())
-
+	// runtime实例开始监听配置变更，一旦配置变更，runtime实例会构造新的dispatcher。
 	if err = p.runtimeListen(rt); err != nil {
 		_ = s.Close()
 		return nil, fmt.Errorf("unable to listen: %v", err)
@@ -197,6 +201,7 @@ func newServer(a *Args, p *patchTable) (*Server, error) {
 	// get the grpc server wired up
 	grpc.EnableTracing = a.EnableGRPCTracing
 	s.server = grpc.NewServer(grpcOptions...)
+	// 6.注册Mixer gRPC server
 	mixerpb.RegisterMixerServer(s.server, api.NewGRPCServer(s.dispatcher, s.gp))
 
 	if a.LivenessProbeOptions.IsValid() {
@@ -211,7 +216,8 @@ func newServer(a *Args, p *patchTable) (*Server, error) {
 		st.RegisterProbe(s.readinessProbe, "store")
 		s.readinessProbe.Start()
 	}
-
+	// 启动ControlZ监听器，ControlZ提供了Istio的内省功能。Mixer与ctrlz集成时，会启动一个
+	// web service监听器用于展示Mixer的环境变量、参数版本信息、内存信息、进程信息、metrics等。
 	go ctrlz.Run(a.IntrospectionOptions, nil)
 
 	return s, nil

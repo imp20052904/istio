@@ -61,7 +61,9 @@ var lg = log.RegisterScope("api", "API dispatcher messages.", 0)
 
 // NewGRPCServer creates a gRPC serving stack.
 func NewGRPCServer(dispatcher dispatcher.Dispatcher, gp *pool.GoroutinePool) mixerpb.MixerServer {
+	// 从globalList拷贝出list切片，list形如[]string{"source.ip","source.port","request.id"...}
 	list := attribute.GlobalList()
+	// 将以attribute.name作为key，index作为value，构造map。形如:map[string][int]{"source.ip":1, "source.port":2, "request.id":3...}
 	globalDict := make(map[string]int32, len(list))
 	for i := 0; i < len(list); i++ {
 		globalDict[list[i]] = int32(i)
@@ -84,13 +86,16 @@ func (s *grpcServer) Check(legacyCtx legacyContext.Context, req *mixerpb.CheckRe
 	globalWordCount := int(req.GlobalWordCount)
 
 	// bag around the input proto that keeps track of reference attributes
+	// 构造基于proto的属性包protoBag。protoBag提供了对一组attributes进行访问、修改的机制。
 	protoBag := attribute.NewProtoBag(&req.Attributes, s.globalDict, s.globalWordList)
 	defer protoBag.Done()
 
 	// This holds the output state of preprocess operations
+	// 构造可变的（执行check方法后会变化）属性包checkBag
 	checkBag := attribute.GetMutableBag(protoBag)
 	defer checkBag.Done()
-
+	// 执行dispatcher的预处理过程，s.dispatcher为runtime实例impl。
+	// impl的Preprocess方法会调度生成属性相关的adapter，比如kubernetes adapter。
 	if err := s.dispatcher.Preprocess(legacyCtx, protoBag, checkBag); err != nil {
 		err = fmt.Errorf("preprocessing attributes failed: %v", err)
 		lg.Errora("Check failed:", err.Error())
@@ -103,8 +108,9 @@ func (s *grpcServer) Check(legacyCtx legacyContext.Context, req *mixerpb.CheckRe
 
 	// snapshot the state after we've called the APAs so that we can reuse it
 	// for every check + quota call.
+	// 获取属性包中被引用的属性快照snapApa，snapApa能在每次check和quota处理中重复使用。
 	snapApa := protoBag.SnapshotReferencedAttributes()
-
+	// 执行dispatcher的前置条件检查，Check方法内部会计算被引用的属性并同步到protoBag中。
 	cr, err := s.dispatcher.Check(legacyCtx, checkBag)
 	if err != nil {
 		err = fmt.Errorf("performing check operation failed: %v", err)
@@ -124,7 +130,7 @@ func (s *grpcServer) Check(legacyCtx legacyContext.Context, req *mixerpb.CheckRe
 	} else {
 		lg.Debugf("Check denied: %v", cr.Status)
 	}
-
+	// 构造Check rpc response实例
 	resp := &mixerpb.CheckResponse{
 		Precondition: mixerpb.CheckResponse_PreconditionResult{
 			ValidDuration:        cr.ValidDuration,
@@ -133,10 +139,10 @@ func (s *grpcServer) Check(legacyCtx legacyContext.Context, req *mixerpb.CheckRe
 			ReferencedAttributes: protoBag.GetReferencedAttributes(s.globalDict, globalWordCount),
 		},
 	}
-
+	// 如果前置条件检查通过且配额表总数大于0，则计算新的配额
 	if status.IsOK(resp.Precondition.Status) && len(req.Quotas) > 0 {
 		resp.Quotas = make(map[string]mixerpb.CheckResponse_QuotaResult, len(req.Quotas))
-
+		// 遍历配额表，计算每个配额是否为引用配额
 		for name, param := range req.Quotas {
 			qma := &dispatcher.QuotaMethodArgs{
 				Quota:           name,
@@ -153,6 +159,7 @@ func (s *grpcServer) Check(legacyCtx legacyContext.Context, req *mixerpb.CheckRe
 			crqr := mixerpb.CheckResponse_QuotaResult{}
 
 			var qr *adapter.QuotaResult
+			// 执行dispacher的配额处理方法。istio/mixer/pkg/runtime/dispatcher/dispatcher.go#func (d *Impl) Quota(）
 			qr, err = s.dispatcher.Quota(legacyCtx, checkBag, qma)
 			if err != nil {
 				err = fmt.Errorf("performing quota alloc failed: %v", err)
@@ -172,12 +179,12 @@ func (s *grpcServer) Check(legacyCtx legacyContext.Context, req *mixerpb.CheckRe
 			}
 
 			lg.Debugf("Quota '%s' result: %#v", qma.Quota, crqr)
-
+			// 根据全局attribute字典来计算被引用的attributes
 			crqr.ReferencedAttributes = protoBag.GetReferencedAttributes(s.globalDict, globalWordCount)
 			resp.Quotas[name] = crqr
 		}
 	}
-
+	// 返回Check gRPC相应结果
 	return resp, nil
 }
 
@@ -215,6 +222,7 @@ func (s *grpcServer) Report(legacyCtx legacyContext.Context, req *mixerpb.Report
 		// the first attribute block is handled by the protoBag as a foundation,
 		// deltas are applied to the child bag (i.e. requestBag)
 		if i > 0 {
+			// 数据转换
 			err = accumBag.UpdateBagFromProto(&req.Attributes[i], s.globalWordList)
 			if err != nil {
 				err = fmt.Errorf("request could not be processed due to invalid attributes: %v", err)
@@ -225,7 +233,7 @@ func (s *grpcServer) Report(legacyCtx legacyContext.Context, req *mixerpb.Report
 		}
 
 		lg.Debug("Dispatching Preprocess")
-
+		// 数据加工
 		if err = s.dispatcher.Preprocess(newctx, accumBag, reportBag); err != nil {
 			err = fmt.Errorf("preprocessing attributes failed: %v", err)
 			span.LogFields(otlog.String("error", err.Error()))
@@ -236,7 +244,7 @@ func (s *grpcServer) Report(legacyCtx legacyContext.Context, req *mixerpb.Report
 		lg.Debug("Dispatching to main adapters after running preprocessors")
 		lg.Debuga("Attribute Bag: \n", reportBag)
 		lg.Debugf("Dispatching Report %d out of %d", i+1, len(req.Attributes))
-
+		// 数据分发
 		err = s.dispatcher.Report(legacyCtx, reportBag)
 		if err != nil {
 			span.LogFields(otlog.String("error", err.Error()))

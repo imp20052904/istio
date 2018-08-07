@@ -33,6 +33,7 @@ const Group = "config.istio.io"
 // Version is the K8s API version.
 const Version = "v1alpha2"
 
+// mixs crd 命令
 func crdCmd(tmplInfos map[string]template.Info, adapters []adapter.InfoFn, printf, fatalf shared.FormatFn) *cobra.Command {
 	adapterCmd := cobra.Command{
 		Use:   "crd",

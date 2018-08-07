@@ -304,9 +304,9 @@ ${ISTIO_OUT}/istioctl-win.exe: depend
 	STATIC=0 GOOS=windows bin/gobuild.sh $@ istio.io/istio/pkg/version ./istioctl/cmd/istioctl
 
 MIXER_GO_BINS:=${ISTIO_OUT}/mixs ${ISTIO_OUT}/mixc
-mixc:
+mixc: # Mixer客户端，通过mixc我们可以和运行的mixer进行交互
 	bin/gobuild.sh ${ISTIO_OUT}/mixc istio.io/istio/pkg/version ./mixer/cmd/mixc
-mixs:
+mixs: # Mixer服务端，和Envoy、adapter交互。部署Istio的时候随之启动。
 	bin/gobuild.sh ${ISTIO_OUT}/mixs istio.io/istio/pkg/version ./mixer/cmd/mixs
 
 $(MIXER_GO_BINS):
@@ -558,7 +558,7 @@ clean.go: ; $(info $(H) cleaning...)
 .PHONY: artifacts gcs.push.istioctl-all artifacts installgen
 
 # for now docker is limited to Linux compiles - why ?
-include tools/istio-docker.mk
+include tools/istio-docker.mk # 引入编译docker镜像的Makefile文件
 
 # if first part of URL (i.e., hostname) is gcr.io then upload istioctl and deb
 $(if $(findstring gcr.io,$(firstword $(subst /, ,$(HUB)))),$(eval push: gcs.push.istioctl-all gcs.push.deb),)

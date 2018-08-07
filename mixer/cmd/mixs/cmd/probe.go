@@ -22,6 +22,7 @@ import (
 	"istio.io/istio/pkg/probe"
 )
 
+// mixs probe 命令
 func probeCmd(printf, fatalf shared.FormatFn) *cobra.Command {
 	logOptions := log.DefaultOptions()
 	probeOptions := &probe.Options{}

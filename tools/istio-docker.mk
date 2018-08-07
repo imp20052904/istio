@@ -164,7 +164,7 @@ $(SERVICEGRAPH_DOCKER): addons/servicegraph/docker/Dockerfile$$(suffix $$@) \
 		$(ISTIO_DOCKER)/servicegraph $(ISTIO_DOCKER)/js $(ISTIO_DOCKER)/force | $(ISTIO_DOCKER)
 	$(DOCKER_RULE)
 
-# mixer docker images
+# mixer docker images 编译mixer镜像相关指令
 
 MIXER_DOCKER:=docker.mixer docker.mixer_debug
 $(MIXER_DOCKER): mixer/docker/Dockerfile$$(suffix $$@) \

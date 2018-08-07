@@ -25,15 +25,18 @@ import (
 	generatedTmplRepo "istio.io/istio/mixer/template"
 )
 
+// 从mixer/pkg/template包获取所有注册的模板信息。
 func supportedTemplates() map[string]template.Info {
 	return generatedTmplRepo.SupportedTmplInfo
 }
 
+// 从mixer/pkg/adapter包获取所有注册的适配器信息。
 func supportedAdapters() []adptr.InfoFn {
 	return adapter.Inventory()
 }
-
+// Mixs命令入口
 func main() {
+	// 构造cobra.Command实例，mixs server子命令设计在serverCmd中定义。
 	rootCmd := cmd.GetRootCmd(os.Args[1:], supportedTemplates(), supportedAdapters(), shared.Printf, shared.Fatalf)
 
 	if err := rootCmd.Execute(); err != nil {
